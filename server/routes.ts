@@ -95,6 +95,115 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json(settings);
   });
 
+  // --- USDA FoodData Central Search (proxy) ---
+  // Uses the free DEMO_KEY by default. For production, get a key at https://fdc.nal.usda.gov/api-key-signup
+  const USDA_API_KEY = process.env.USDA_API_KEY || "DEMO_KEY";
+
+  app.get("/api/food-search", async (req, res) => {
+    const query = req.query.q as string;
+    if (!query || query.trim().length < 2) {
+      return res.json({ foods: [] });
+    }
+    try {
+      const url = `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${USDA_API_KEY}&query=${encodeURIComponent(query)}&pageSize=20&dataType=Foundation,SR%20Legacy,Survey%20(FNDDS)`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        return res.status(response.status).json({ error: "USDA API error" });
+      }
+      const data = await response.json() as any;
+
+      // Transform USDA response into a simpler format
+      const foods = (data.foods || []).map((food: any) => {
+        const nutrients = food.foodNutrients || [];
+        const getNutrient = (id: number) => {
+          const n = nutrients.find((n: any) => n.nutrientId === id);
+          return n ? n.value : 0;
+        };
+        return {
+          fdcId: food.fdcId,
+          name: food.description || food.lowercaseDescription || "",
+          brand: food.brandOwner || food.brandName || null,
+          category: food.foodCategory || null,
+          servingSize: food.servingSize ? `${food.servingSize}${food.servingSizeUnit || 'g'}` : "100g",
+          servingSizeValue: food.servingSize || 100,
+          servingSizeUnit: food.servingSizeUnit || "g",
+          // Nutrient IDs: 1008=Energy(kcal), 1003=Protein, 1004=Fat, 1005=Carbs, 1079=Fiber
+          caloriesPer100g: getNutrient(1008),
+          proteinPer100g: getNutrient(1003),
+          fatPer100g: getNutrient(1004),
+          carbsPer100g: getNutrient(1005),
+          fiberPer100g: getNutrient(1079),
+        };
+      });
+
+      res.json({ foods, totalHits: data.totalHits || 0 });
+    } catch (e: any) {
+      console.error("USDA search error:", e.message);
+      res.status(500).json({ error: "Failed to search foods" });
+    }
+  });
+
+  // --- Open Food Facts Barcode Lookup (proxy) ---
+  app.get("/api/barcode/:code", async (req, res) => {
+    const code = req.params.code;
+    if (!code || code.length < 4) {
+      return res.status(400).json({ error: "Invalid barcode" });
+    }
+    try {
+      const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}?fields=product_name,brands,serving_size,serving_quantity,nutriments,image_front_url,categories`;
+      const response = await fetch(url, {
+        headers: { "User-Agent": "HouseMDFoodTracker/1.0 (contact@housemd.app)" }
+      });
+      if (!response.ok) {
+        return res.status(response.status).json({ error: "Open Food Facts API error" });
+      }
+      const data = await response.json() as any;
+
+      if (data.status !== 1 || !data.product) {
+        return res.json({ found: false, product: null });
+      }
+
+      const p = data.product;
+      const n = p.nutriments || {};
+
+      // Open Food Facts provides per-100g values. If serving size is known, compute per-serving.
+      const servingG = p.serving_quantity || 100;
+      const factor = servingG / 100;
+
+      res.json({
+        found: true,
+        product: {
+          barcode: code,
+          name: p.product_name || "Unknown Product",
+          brand: p.brands || null,
+          categories: p.categories || null,
+          imageUrl: p.image_front_url || null,
+          servingSize: p.serving_size || `${servingG}g`,
+          servingQuantityG: servingG,
+          // Per-serving values
+          calories: Math.round((n["energy-kcal_100g"] || 0) * factor),
+          protein: Math.round(((n.proteins_100g || 0) * factor) * 10) / 10,
+          fat: Math.round(((n.fat_100g || 0) * factor) * 10) / 10,
+          totalCarbs: Math.round(((n.carbohydrates_100g || 0) * factor) * 10) / 10,
+          fiber: Math.round(((n.fiber_100g || 0) * factor) * 10) / 10,
+          sugars: Math.round(((n.sugars_100g || 0) * factor) * 10) / 10,
+          sodium: Math.round(((n.sodium_100g || 0) * factor * 1000) * 10) / 10, // mg
+          // Per-100g raw values for reference
+          per100g: {
+            calories: n["energy-kcal_100g"] || 0,
+            protein: n.proteins_100g || 0,
+            fat: n.fat_100g || 0,
+            carbs: n.carbohydrates_100g || 0,
+            fiber: n.fiber_100g || 0,
+          }
+        }
+      });
+    } catch (e: any) {
+      console.error("Barcode lookup error:", e.message);
+      res.status(500).json({ error: "Failed to look up barcode" });
+    }
+  });
+
   // --- Seed sample data ---
   app.post("/api/seed", (_req, res) => {
     try {
