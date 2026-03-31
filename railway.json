@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "NODE_ENV=production node dist/index.cjs",
+    "healthcheckPath": "/api/settings",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}

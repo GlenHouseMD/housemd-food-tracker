@@ -169,10 +169,27 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
   }
 
   // ---- Camera-based barcode scanning ----
+  // Note: html5-qrcode uses localStorage internally which is blocked in sandboxed iframes.
+  // Camera scanning works on real mobile devices. In the deployed preview, use manual barcode entry.
   async function startCameraScanner() {
     setBarcodeScanning(true);
     setBarcodeError(null);
     try {
+      // Polyfill localStorage for sandboxed environments
+      if (!window.localStorage) {
+        const store: Record<string, string> = {};
+        Object.defineProperty(window, 'localStorage', {
+          value: {
+            getItem: (k: string) => store[k] || null,
+            setItem: (k: string, v: string) => { store[k] = v; },
+            removeItem: (k: string) => { delete store[k]; },
+            clear: () => { Object.keys(store).forEach(k => delete store[k]); },
+            get length() { return Object.keys(store).length; },
+            key: (i: number) => Object.keys(store)[i] || null,
+          },
+          writable: true,
+        });
+      }
       const { Html5Qrcode } = await import("html5-qrcode");
       // Small delay for DOM to render
       await new Promise(r => setTimeout(r, 200));
@@ -201,10 +218,11 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
       );
     } catch (err: any) {
       setBarcodeScanning(false);
-      if (err?.message?.includes("NotAllowedError") || err?.message?.includes("Permission")) {
+      const msg = String(err?.message || err || "");
+      if (msg.includes("NotAllowedError") || msg.includes("Permission")) {
         setBarcodeError("Camera access denied. Please allow camera access in your browser settings, or enter the barcode manually below.");
       } else {
-        setBarcodeError("Camera not available. You can enter the barcode number manually below.");
+        setBarcodeError("Camera not available on this device. You can enter the barcode number manually below.");
       }
     }
   }

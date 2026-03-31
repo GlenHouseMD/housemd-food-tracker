@@ -16,6 +16,13 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'barcode-scanner': ['html5-qrcode'],
+        },
+      },
+    },
   },
   server: {
     fs: {
