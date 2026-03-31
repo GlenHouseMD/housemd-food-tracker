@@ -5,6 +5,11 @@ import { insertFoodEntrySchema, insertGlucoseReadingSchema } from "@shared/schem
 import { seedSampleData } from "./seed";
 
 export async function registerRoutes(server: Server, app: Express) {
+  // --- Health Check ---
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
   // --- Food Entries ---
   app.get("/api/food-entries", (req, res) => {
     const date = req.query.date as string;
