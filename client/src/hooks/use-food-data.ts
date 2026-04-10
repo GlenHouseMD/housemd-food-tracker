@@ -1,34 +1,25 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 import type { FoodEntry, InsertFoodEntry, GlucoseReading, InsertGlucoseReading, UserSettings } from "@shared/schema";
-import { format } from "date-fns";
+import * as db from "@/lib/db";
 
 export function useFoodEntries(date: string) {
   return useQuery<FoodEntry[]>({
     queryKey: ["/api/food-entries", date],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/food-entries?date=${date}`);
-      return res.json();
-    },
+    queryFn: () => db.getFoodEntries(date),
   });
 }
 
 export function useFoodEntriesRange(startDate: string, endDate: string) {
   return useQuery<FoodEntry[]>({
     queryKey: ["/api/food-entries/range", startDate, endDate],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/food-entries/range?startDate=${startDate}&endDate=${endDate}`);
-      return res.json();
-    },
+    queryFn: () => db.getFoodEntriesByDateRange(startDate, endDate),
   });
 }
 
 export function useAddFoodEntry() {
   return useMutation({
-    mutationFn: async (entry: InsertFoodEntry) => {
-      const res = await apiRequest("POST", "/api/food-entries", entry);
-      return res.json();
-    },
+    mutationFn: (entry: InsertFoodEntry) => db.addFoodEntry(entry),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/food-entries", variables.date] });
       queryClient.invalidateQueries({ queryKey: ["/api/food-entries/range"] });
@@ -38,10 +29,8 @@ export function useAddFoodEntry() {
 
 export function useDeleteFoodEntry() {
   return useMutation({
-    mutationFn: async ({ id, date }: { id: number; date: string }) => {
-      await apiRequest("DELETE", `/api/food-entries/${id}`);
-      return { date };
-    },
+    mutationFn: ({ id, date }: { id: number; date: string }) =>
+      db.deleteFoodEntry(id).then(() => ({ date })),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/food-entries", variables.date] });
       queryClient.invalidateQueries({ queryKey: ["/api/food-entries/range"] });
@@ -52,29 +41,20 @@ export function useDeleteFoodEntry() {
 export function useGlucoseReadings(date: string) {
   return useQuery<GlucoseReading[]>({
     queryKey: ["/api/glucose", date],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/glucose?date=${date}`);
-      return res.json();
-    },
+    queryFn: () => db.getGlucoseReadings(date),
   });
 }
 
 export function useGlucoseRange(startDate: string, endDate: string) {
   return useQuery<GlucoseReading[]>({
     queryKey: ["/api/glucose/range", startDate, endDate],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/glucose/range?startDate=${startDate}&endDate=${endDate}`);
-      return res.json();
-    },
+    queryFn: () => db.getGlucoseReadingsByDateRange(startDate, endDate),
   });
 }
 
 export function useAddGlucoseReading() {
   return useMutation({
-    mutationFn: async (reading: InsertGlucoseReading) => {
-      const res = await apiRequest("POST", "/api/glucose", reading);
-      return res.json();
-    },
+    mutationFn: (reading: InsertGlucoseReading) => db.addGlucoseReading(reading),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/glucose"] });
     },
@@ -84,19 +64,13 @@ export function useAddGlucoseReading() {
 export function useSettings() {
   return useQuery<UserSettings>({
     queryKey: ["/api/settings"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/settings");
-      return res.json();
-    },
+    queryFn: () => db.getSettings(),
   });
 }
 
 export function useUpdateSettings() {
   return useMutation({
-    mutationFn: async (settings: Partial<UserSettings>) => {
-      const res = await apiRequest("PATCH", "/api/settings", settings);
-      return res.json();
-    },
+    mutationFn: (settings: Partial<UserSettings>) => db.updateSettings(settings),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
     },
@@ -105,20 +79,15 @@ export function useUpdateSettings() {
 
 export function useSeedData() {
   return useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/seed");
-      return res.json();
-    },
+    mutationFn: () => db.seedSampleData(),
     onSuccess: () => {
       queryClient.invalidateQueries();
     },
   });
 }
 
-// Utility: aggregate daily totals from entries
 export function aggregateDailyTotals(entries: FoodEntry[]) {
   const byDate: Record<string, { calories: number; protein: number; fat: number; totalCarbs: number; netCarbs: number; count: number }> = {};
-  
   for (const entry of entries) {
     if (!byDate[entry.date]) {
       byDate[entry.date] = { calories: 0, protein: 0, fat: 0, totalCarbs: 0, netCarbs: 0, count: 0 };
@@ -130,6 +99,5 @@ export function aggregateDailyTotals(entries: FoodEntry[]) {
     byDate[entry.date].netCarbs += entry.netCarbs;
     byDate[entry.date].count += 1;
   }
-  
   return byDate;
 }

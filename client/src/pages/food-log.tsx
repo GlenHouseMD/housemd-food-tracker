@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useFoodEntries, useAddFoodEntry, useDeleteFoodEntry, useSettings } from "@/hooks/use-food-data";
-import { apiRequest } from "@/lib/queryClient";
 import { format, addDays, subDays } from "date-fns";
 import { Plus, Trash2, ChevronLeft, ChevronRight, Search, Camera, ScanBarcode, PenLine, Sparkles, Loader2, AlertCircle, CheckCircle2, Keyboard } from "lucide-react";
 import { getMealTypeLabel, getTagColor } from "@/lib/utils";
@@ -88,24 +87,35 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
   const addMutation = useAddFoodEntry();
   const { toast } = useToast();
 
-  // ---- Debounced USDA search ----
+  // ---- Debounced USDA search (direct to USDA API from browser) ----
   const doSearch = useCallback(async (query: string) => {
-    if (query.trim().length < 2) {
-      setSearchResults([]);
-      setSearchTotal(0);
-      return;
-    }
+    if (query.trim().length < 2) { setSearchResults([]); setSearchTotal(0); return; }
     setSearchLoading(true);
     try {
-      const res = await apiRequest("GET", `/api/food-search?q=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      setSearchResults(data.foods || []);
+      const url = `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=DEMO_KEY&query=${encodeURIComponent(query)}&pageSize=20&dataType=Foundation,SR%20Legacy,Survey%20(FNDDS)`;
+      const res = await fetch(url);
+      const data = await res.json() as any;
+      const foods = (data.foods || []).map((food: any) => {
+        const nutrients = food.foodNutrients || [];
+        const getNutrient = (id: number) => { const n = nutrients.find((n: any) => n.nutrientId === id); return n ? n.value : 0; };
+        return {
+          fdcId: food.fdcId,
+          name: food.description || "",
+          brand: food.brandOwner || food.brandName || null,
+          category: food.foodCategory || null,
+          servingSize: food.servingSize ? `${food.servingSize}${food.servingSizeUnit || 'g'}` : "100g",
+          servingSizeValue: food.servingSize || 100,
+          servingSizeUnit: food.servingSizeUnit || "g",
+          caloriesPer100g: getNutrient(1008),
+          proteinPer100g: getNutrient(1003),
+          fatPer100g: getNutrient(1004),
+          carbsPer100g: getNutrient(1005),
+          fiberPer100g: getNutrient(1079),
+        };
+      });
+      setSearchResults(foods);
       setSearchTotal(data.totalHits || 0);
-    } catch {
-      setSearchResults([]);
-    } finally {
-      setSearchLoading(false);
-    }
+    } catch { setSearchResults([]); } finally { setSearchLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -134,25 +144,30 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
     setMode("manual");
   }
 
-  // ---- Barcode lookup ----
+  // ---- Barcode lookup (direct to Open Food Facts from browser) ----
   async function lookupBarcode(code: string) {
     if (!code || code.length < 4) return;
-    setBarcodeLoading(true);
-    setBarcodeError(null);
-    setBarcodeResult(null);
+    setBarcodeLoading(true); setBarcodeError(null); setBarcodeResult(null);
     try {
-      const res = await apiRequest("GET", `/api/barcode/${encodeURIComponent(code)}`);
-      const data = await res.json();
-      if (data.found && data.product) {
-        setBarcodeResult(data.product);
-      } else {
-        setBarcodeError("Product not found in the database. Try searching by name instead.");
+      const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}?fields=product_name,brands,serving_size,serving_quantity,nutriments`;
+      const res = await fetch(url);
+      const data = await res.json() as any;
+      if (data.status !== 1 || !data.product) {
+        setBarcodeError("Product not found in the database. Try searching by name instead."); return;
       }
-    } catch {
-      setBarcodeError("Failed to look up barcode. Check your connection.");
-    } finally {
-      setBarcodeLoading(false);
-    }
+      const p = data.product; const n = p.nutriments || {};
+      const servingG = p.serving_quantity || 100; const factor = servingG / 100;
+      setBarcodeResult({
+        barcode: code, name: p.product_name || "Unknown Product", brand: p.brands || null,
+        servingSize: p.serving_size || `${servingG}g`,
+        calories: Math.round((n["energy-kcal_100g"] || 0) * factor),
+        protein: Math.round(((n.proteins_100g || 0) * factor) * 10) / 10,
+        fat: Math.round(((n.fat_100g || 0) * factor) * 10) / 10,
+        totalCarbs: Math.round(((n.carbohydrates_100g || 0) * factor) * 10) / 10,
+        fiber: Math.round(((n.fiber_100g || 0) * factor) * 10) / 10,
+      });
+    } catch { setBarcodeError("Failed to look up barcode. Check your connection."); }
+    finally { setBarcodeLoading(false); }
   }
 
   function selectBarcodeProduct(product: BarcodeProduct) {
