@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,8 +8,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGlucoseRange, useAddGlucoseReading, useSettings, useFoodEntriesRange, aggregateDailyTotals } from "@/hooks/use-food-data";
-import { format, subDays, eachDayOfInterval } from "date-fns";
-import { Activity, Plus, Droplets, TrendingDown, TrendingUp, Minus, Info } from "lucide-react";
+import { addGlucoseReading } from "@/lib/db";
+import { queryClient } from "@/lib/queryClient";
+import { format, subDays, eachDayOfInterval, parse, isValid } from "date-fns";
+import { Activity, Plus, Droplets, TrendingDown, Upload, Info, CheckCircle2, AlertCircle } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, ScatterChart, Scatter, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine, ComposedChart, Bar, Area
@@ -19,6 +21,210 @@ import { useToast } from "@/hooks/use-toast";
 const today = new Date();
 const startDate30 = format(subDays(today, 29), "yyyy-MM-dd");
 const endDate = format(today, "yyyy-MM-dd");
+
+// ─── LibreView CSV Importer ──────────────────────────────────────────────────
+
+type ImportResult = { imported: number; skipped: number; errors: string[] };
+
+async function parseLibreViewCSV(text: string): Promise<ImportResult> {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  
+  // LibreView CSV has 1–2 header rows before the column row.
+  // Find the header row by looking for "Device Timestamp" or "Time"
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    const lower = lines[i].toLowerCase();
+    if (lower.includes("device timestamp") || lower.includes("timestamp") || lower.includes("time")) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) {
+    return { imported: 0, skipped: 0, errors: ["Could not find column headers. Make sure you're using the LibreView CSV export."] };
+  }
+
+  // Detect delimiter (comma or semicolon or tab)
+  const headerLine = lines[headerIdx];
+  const delim = headerLine.includes("\t") ? "\t" : headerLine.includes(";") ? ";" : ",";
+  const headers = headerLine.split(delim).map(h => h.trim().replace(/^"|"$/g, "").toLowerCase());
+
+  // Find relevant column indices
+  const tsIdx = headers.findIndex(h => h.includes("device timestamp") || h === "time");
+  const recordTypeIdx = headers.findIndex(h => h.includes("record type"));
+  const historicIdx = headers.findIndex(h => h.includes("historic glucose"));
+  const scanIdx = headers.findIndex(h => h.includes("scan glucose"));
+
+  if (tsIdx === -1) {
+    return { imported: 0, skipped: 0, errors: ["Timestamp column not found. Expected 'Device Timestamp' column."] };
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  const dataLines = lines.slice(headerIdx + 1);
+  for (const line of dataLines) {
+    if (!line.trim()) continue;
+    const cols = line.split(delim).map(c => c.trim().replace(/^"|"$/g, ""));
+
+    // Parse timestamp — LibreView format: "04-03-2024 03:04 PM" or "2024-04-03 15:04"
+    const rawTs = cols[tsIdx];
+    if (!rawTs) { skipped++; continue; }
+
+    let parsedDate: Date | null = null;
+    // Try MM-DD-YYYY HH:mm AM/PM
+    const d1 = parse(rawTs, "MM-dd-yyyy hh:mm a", new Date());
+    if (isValid(d1)) parsedDate = d1;
+    // Try MM-DD-YYYY HH:mm (24h)
+    if (!parsedDate) { const d2 = parse(rawTs, "MM-dd-yyyy HH:mm", new Date()); if (isValid(d2)) parsedDate = d2; }
+    // Try YYYY-MM-DD HH:mm
+    if (!parsedDate) { const d3 = parse(rawTs, "yyyy-MM-dd HH:mm", new Date()); if (isValid(d3)) parsedDate = d3; }
+    // Try DD/MM/YYYY HH:mm
+    if (!parsedDate) { const d4 = parse(rawTs, "dd/MM/yyyy HH:mm", new Date()); if (isValid(d4)) parsedDate = d4; }
+
+    if (!parsedDate) { skipped++; continue; }
+
+    const dateStr = format(parsedDate, "yyyy-MM-dd");
+    const timeStr = format(parsedDate, "HH:mm");
+
+    // Determine glucose value and reading type
+    const recordType = recordTypeIdx !== -1 ? cols[recordTypeIdx] : "";
+    let glucoseVal: number | null = null;
+    let readingType = "cgm";
+
+    // Record type 0 = automatic CGM (historic), 1 = manual scan
+    if (recordType === "0" || recordType === "") {
+      const raw = historicIdx !== -1 ? cols[historicIdx] : "";
+      if (raw) { glucoseVal = parseFloat(raw); readingType = "cgm"; }
+    } else if (recordType === "1") {
+      const raw = scanIdx !== -1 ? cols[scanIdx] : "";
+      if (raw) { glucoseVal = parseFloat(raw); readingType = "post-meal"; }
+    }
+
+    if (!glucoseVal || isNaN(glucoseVal) || glucoseVal <= 0) { skipped++; continue; }
+
+    // Convert mmol/L to mg/dL if value looks like mmol/L (< 35)
+    if (glucoseVal < 35) glucoseVal = Math.round(glucoseVal * 18.0182);
+
+    try {
+      await addGlucoseReading({
+        date: dateStr,
+        time: timeStr,
+        type: readingType,
+        value: glucoseVal,
+        notes: "Imported from LibreView",
+        createdAt: parsedDate.toISOString(),
+      });
+      imported++;
+    } catch {
+      errors.push(`Failed to save reading for ${dateStr} ${timeStr}`);
+    }
+  }
+
+  // Invalidate all glucose queries so charts refresh
+  queryClient.invalidateQueries({ queryKey: ["/api/glucose"] });
+  return { imported, skipped, errors };
+}
+
+function LibreViewImporter() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [status, setStatus] = useState<"idle" | "parsing" | "done" | "error">("idle");
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const { toast } = useToast();
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStatus("parsing");
+    setResult(null);
+    try {
+      const text = await file.text();
+      const res = await parseLibreViewCSV(text);
+      setResult(res);
+      setStatus(res.errors.length > 0 && res.imported === 0 ? "error" : "done");
+      if (res.imported > 0) {
+        toast({ title: "Import complete", description: `${res.imported} glucose readings imported from LibreView` });
+      }
+    } catch (err: any) {
+      setResult({ imported: 0, skipped: 0, errors: [err?.message || "Unknown error"] });
+      setStatus("error");
+    }
+    // Reset input so same file can be re-imported
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  return (
+    <Card className="shadow-sm" data-testid="card-libreview-import">
+      <CardHeader className="pb-3 px-4 pt-4">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Upload className="w-4 h-4 text-primary" />
+          Import from FreeStyle Libre / LibreView
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Export your glucose history from{" "}
+          <a href="https://www.libreview.com" target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
+            libreview.com
+          </a>{" "}
+          (Glucose History → Download Glucose Data), then select the CSV file below.
+        </p>
+
+        <div className="flex items-center gap-3">
+          <label className="cursor-pointer flex-1">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-primary/40 hover:border-primary/70 hover:bg-primary/5 transition-colors">
+              <Upload className="w-4 h-4 text-primary shrink-0" />
+              <span className="text-sm text-muted-foreground">
+                {status === "parsing" ? "Importing..." : "Tap to select LibreView CSV file"}
+              </span>
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,.txt"
+              className="hidden"
+              onChange={handleFile}
+              disabled={status === "parsing"}
+              data-testid="input-libreview-csv"
+            />
+          </label>
+        </div>
+
+        {/* Result */}
+        {result && status === "done" && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-green-50 dark:bg-green-950/20">
+            <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-green-700 dark:text-green-300">
+                {result.imported} readings imported
+              </p>
+              {result.skipped > 0 && (
+                <p className="text-xs text-muted-foreground">{result.skipped} rows skipped (no glucose value)</p>
+              )}
+            </div>
+          </div>
+        )}
+        {result && status === "error" && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/5">
+            <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              {result.errors.slice(0, 3).map((e, i) => (
+                <p key={i} className="text-xs text-muted-foreground">{e}</p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="text-[10px] text-muted-foreground space-y-1">
+          <p>• Supports FreeStyle Libre 1, 2, 3, and Lingo exports</p>
+          <p>• Reads both CGM (automatic) and manual scan readings</p>
+          <p>• Converts mmol/L to mg/dL automatically if needed</p>
+          <p>• Existing readings are not deleted — imports are additive</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function AddGlucoseDialog({ onClose }: { onClose: () => void }) {
   const [date, setDate] = useState(format(today, "yyyy-MM-dd"));
@@ -279,16 +485,8 @@ export default function Metabolic() {
             </CardContent>
           </Card>
 
-          {/* CGM placeholder */}
-          <Card className="shadow-sm border-dashed" data-testid="card-cgm-placeholder">
-            <CardContent className="p-6 text-center">
-              <Activity className="w-8 h-8 mx-auto text-muted-foreground/30 mb-3" />
-              <h3 className="text-sm font-medium mb-1">CGM Integration Coming</h3>
-              <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-                Connect a continuous glucose monitor (Dexcom, Libre, etc.) to see real-time glycemic data overlaid on your meal log. This feature will support data import via API or CSV upload.
-              </p>
-            </CardContent>
-          </Card>
+          {/* LibreView CSV import */}
+          <LibreViewImporter />
         </div>
       )}
     </div>
