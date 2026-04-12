@@ -379,7 +379,7 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4 overflow-hidden">
       {/* Mode tabs */}
       <div className="grid grid-cols-4 gap-1.5 bg-muted/50 p-1 rounded-lg">
         {[
@@ -409,51 +409,61 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
 
       {/* ===== SEARCH MODE (USDA FoodData Central) ===== */}
       {mode === "search" && (
-        <div className="space-y-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Search foods (e.g., chicken breast, almonds, yogurt)..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
-              data-testid="input-food-search"
-              autoFocus
-            />
-          </div>
-          <p className="text-[10px] text-muted-foreground flex items-center gap-1">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
-            Searching USDA FoodData Central — {searchTotal > 0 ? `${searchTotal.toLocaleString()} results` : "type to search"}
-          </p>
-          
-          {searchLoading && (
-            <div className="flex items-center gap-2 py-4 justify-center text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Searching...
-            </div>
-          )}
-
-          <div className="max-h-60 overflow-y-auto space-y-0.5">
-            {searchResults.map((food, i) => (
-              <button
-                key={food.fdcId}
-                onClick={() => selectUSDAFood(food)}
-                className="w-full text-left p-2.5 rounded-lg hover:bg-muted/50 transition-colors flex justify-between items-start gap-2"
-                data-testid={`search-result-${i}`}
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium leading-tight">{titleCase(food.name)}</p>
-                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                    {food.brand && <span className="text-[10px] text-muted-foreground">{food.brand}</span>}
-                    {food.category && <span className="text-[10px] text-muted-foreground">· {food.category}</span>}
+        <div className="flex flex-col gap-2 min-h-0">
+          {/* Results appear ABOVE the search box so the keyboard doesn't cover them */}
+          <div className="flex-1 overflow-y-auto overscroll-contain min-h-0" style={{ maxHeight: 260 }}>
+            {searchLoading && (
+              <div className="flex items-center gap-2 py-6 justify-center text-sm text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Searching...
+              </div>
+            )}
+            {!searchLoading && searchResults.length === 0 && searchQuery.length >= 2 && (
+              <p className="text-sm text-muted-foreground text-center py-6">No results found. Try a different term.</p>
+            )}
+            {!searchLoading && searchResults.length === 0 && searchQuery.length < 2 && (
+              <p className="text-sm text-muted-foreground text-center py-6">Type at least 2 characters to search</p>
+            )}
+            <div className="space-y-0.5">
+              {searchResults.map((food, i) => (
+                <button
+                  key={food.fdcId}
+                  onClick={() => selectUSDAFood(food)}
+                  className="w-full text-left p-2.5 rounded-lg hover:bg-muted/50 active:bg-muted transition-colors flex justify-between items-start gap-2"
+                  data-testid={`search-result-${i}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium leading-tight">{titleCase(food.name)}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      {food.brand && <span className="text-[10px] text-muted-foreground">{food.brand}</span>}
+                      {food.category && <span className="text-[10px] text-muted-foreground">· {food.category}</span>}
+                    </div>
                   </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="text-xs font-medium">{Math.round(food.caloriesPer100g)}</p>
-                  <p className="text-[9px] text-muted-foreground">kcal/100g</p>
-                </div>
-              </button>
-            ))}
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-medium">{Math.round(food.caloriesPer100g)}</p>
+                    <p className="text-[9px] text-muted-foreground">kcal/100g</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Search box pinned at the bottom — stays visible above keyboard */}
+          <div className="shrink-0 space-y-1 pt-1 border-t border-border/50">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Search foods (e.g., scrambled eggs, salmon)..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9"
+                data-testid="input-food-search"
+              />
+            </div>
+            <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
+              USDA FoodData Central{searchTotal > 0 ? ` — ${searchTotal.toLocaleString()} results` : ""}
+            </p>
           </div>
         </div>
       )}
@@ -763,7 +773,7 @@ export default function FoodLog() {
                         <Plus className="w-4 h-4" />
                       </Button>
                     </DialogTrigger>
-                    <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+                    <DialogContent className="max-w-md w-[95vw] overflow-hidden flex flex-col" style={{ maxHeight: 'min(85vh, 600px)' }}>
                       <DialogHeader>
                         <DialogTitle className="text-base">Add to {getMealTypeLabel(meal)}</DialogTitle>
                       </DialogHeader>
