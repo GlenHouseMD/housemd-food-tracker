@@ -33,6 +33,13 @@ interface BarcodeProduct {
   name: string;
   brand: string | null;
   servingSize: string;
+  servingGrams: number;        // actual serving in grams (for multiplier)
+  caloriesPer100g: number;     // always store per-100g so multiplier works
+  proteinPer100g: number;
+  fatPer100g: number;
+  carbsPer100g: number;
+  fiberPer100g: number;
+  // Computed for display (servingGrams / 100)
   calories: number;
   protein: number;
   fat: number;
@@ -149,25 +156,88 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
     if (!code || code.length < 4) return;
     setBarcodeLoading(true); setBarcodeError(null); setBarcodeResult(null);
     try {
-      const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}?fields=product_name,brands,serving_size,serving_quantity,nutriments`;
+      // Request all nutrition-related fields including per-serving values
+      const fields = "product_name,brands,serving_size,serving_quantity,product_quantity,quantity,nutriments,nutrition_data_per";
+      const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}?fields=${fields}`;
       const res = await fetch(url);
       const data = await res.json() as any;
       if (data.status !== 1 || !data.product) {
         setBarcodeError("Product not found in the database. Try searching by name instead."); return;
       }
-      const p = data.product; const n = p.nutriments || {};
-      const servingG = p.serving_quantity || 100; const factor = servingG / 100;
+      const p = data.product;
+      const n = p.nutriments || {};
+
+      // Always normalize to per-100g basis so the multiplier works correctly.
+      // Open Food Facts stores _100g values authoritatively — use those.
+      const cal100 = n["energy-kcal_100g"] ?? n["energy-kcal"] ?? 0;
+      const prot100 = n["proteins_100g"] ?? n["proteins"] ?? 0;
+      const fat100 = n["fat_100g"] ?? n["fat"] ?? 0;
+      const carb100 = n["carbohydrates_100g"] ?? n["carbohydrates"] ?? 0;
+      const fiber100 = n["fiber_100g"] ?? n["fiber"] ?? 0;
+
+      // Determine the correct serving size in grams.
+      // serving_quantity is the most reliable field (numeric grams).
+      // Fall back to parsing the serving_size text, then to 100g.
+      let servingG: number = 0;
+      if (p.serving_quantity && p.serving_quantity > 0) {
+        servingG = parseFloat(p.serving_quantity);
+      } else if (p.serving_size) {
+        // Parse "225g" or "1 bowl (225g)" or "225 g"
+        const match = p.serving_size.match(/(\d+\.?\d*)\s*g/i);
+        if (match) servingG = parseFloat(match[1]);
+      }
+      // Sanity check: if serving_quantity looks unreasonably small (< 10g) 
+      // for a packaged product, it might be per-oz or an error — cross-check
+      // against nutrition_data_per field ("serving" vs "100g")
+      if (servingG < 10 && p.nutrition_data_per === "serving") {
+        // Nutriments are expressed per-serving not per-100g; recalculate
+        // by backing out from the serving values
+        const calServing = n["energy-kcal"] ?? n["energy-kcal_serving"] ?? 0;
+        if (calServing > 0 && cal100 > 0) {
+          servingG = (calServing / cal100) * 100;
+        }
+      }
+      if (servingG <= 0) servingG = 100; // final fallback
+
+      const factor = servingG / 100;
+      const round1 = (v: number) => Math.round(v * 10) / 10;
+
       setBarcodeResult({
-        barcode: code, name: p.product_name || "Unknown Product", brand: p.brands || null,
-        servingSize: p.serving_size || `${servingG}g`,
-        calories: Math.round((n["energy-kcal_100g"] || 0) * factor),
-        protein: Math.round(((n.proteins_100g || 0) * factor) * 10) / 10,
-        fat: Math.round(((n.fat_100g || 0) * factor) * 10) / 10,
-        totalCarbs: Math.round(((n.carbohydrates_100g || 0) * factor) * 10) / 10,
-        fiber: Math.round(((n.fiber_100g || 0) * factor) * 10) / 10,
+        barcode: code,
+        name: p.product_name || "Unknown Product",
+        brand: p.brands ? p.brands.split(",")[0].trim() : null,
+        servingSize: p.serving_size || `${Math.round(servingG)}g`,
+        servingGrams: servingG,
+        caloriesPer100g: cal100,
+        proteinPer100g: prot100,
+        fatPer100g: fat100,
+        carbsPer100g: carb100,
+        fiberPer100g: fiber100,
+        calories: Math.round(cal100 * factor),
+        protein: round1(prot100 * factor),
+        fat: round1(fat100 * factor),
+        totalCarbs: round1(carb100 * factor),
+        fiber: round1(fiber100 * factor),
       });
     } catch { setBarcodeError("Failed to look up barcode. Check your connection."); }
     finally { setBarcodeLoading(false); }
+  }
+
+  // ---- Serving multiplier applied to barcode result ----
+  function applyServingMultiplier(product: BarcodeProduct, multiplier: number): BarcodeProduct {
+    const g = product.servingGrams * multiplier;
+    const factor = g / 100;
+    const round1 = (v: number) => Math.round(v * 10) / 10;
+    return {
+      ...product,
+      servingGrams: g,
+      servingSize: `${Math.round(g)}g (${multiplier}× serving)`,
+      calories: Math.round(product.caloriesPer100g * factor),
+      protein: round1(product.proteinPer100g * factor),
+      fat: round1(product.fatPer100g * factor),
+      totalCarbs: round1(product.carbsPer100g * factor),
+      fiber: round1(product.fiberPer100g * factor),
+    };
   }
 
   function selectBarcodeProduct(product: BarcodeProduct) {
@@ -455,11 +525,36 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
                 <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400 shrink-0 mt-0.5" />
                 <p className="text-sm text-green-700 dark:text-green-300 font-medium">Product found</p>
               </div>
-              <div className="p-3 rounded-lg border border-border bg-card">
+              <div className="p-3 rounded-lg border border-border bg-card space-y-2">
                 <p className="text-sm font-semibold">{barcodeResult.name}</p>
                 {barcodeResult.brand && <p className="text-xs text-muted-foreground">{barcodeResult.brand}</p>}
-                <p className="text-xs text-muted-foreground mt-1">Serving: {barcodeResult.servingSize}</p>
-                <div className="grid grid-cols-5 gap-2 mt-2 text-center">
+                <p className="text-xs text-muted-foreground">Per serving: {barcodeResult.servingSize} ({Math.round(barcodeResult.servingGrams)}g)</p>
+                {/* Serving size multiplier — lets user correct half-serving issues */}
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-muted-foreground">Servings:</span>
+                  {[0.5, 1, 1.5, 2, 3].map(mult => (
+                    <button
+                      key={mult}
+                      onClick={() => setBarcodeResult(applyServingMultiplier(
+                        // Always recalculate from original 100g values to avoid compounding
+                        { ...barcodeResult, servingGrams: barcodeResult.caloriesPer100g > 0
+                          ? (barcodeResult.calories / barcodeResult.caloriesPer100g) * 100
+                          : barcodeResult.servingGrams },
+                        mult
+                      ))}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                        Math.abs(barcodeResult.servingGrams - (barcodeResult.caloriesPer100g > 0
+                          ? (barcodeResult.calories / barcodeResult.caloriesPer100g) * 100 * mult
+                          : barcodeResult.servingGrams * mult)) < 1
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'border-border hover:bg-muted'
+                      }`}
+                    >
+                      {mult}×
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-5 gap-2 mt-1 text-center">
                   <div>
                     <p className="text-sm font-bold">{barcodeResult.calories}</p>
                     <p className="text-[9px] text-muted-foreground">kcal</p>

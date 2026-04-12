@@ -6,9 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
 import { useSettings, useUpdateSettings, useSeedData } from "@/hooks/use-food-data";
-import { Save, RotateCcw, Database, Zap, Shield, Wifi } from "lucide-react";
+import { Save, Database, CheckCircle2, Search, ScanBarcode, Activity } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 const dietPresets: Record<string, { calories: number; protein: number; fat: number; totalCarbs: number; netCarbs: number }> = {
@@ -175,29 +174,44 @@ export default function Settings() {
 
       <Separator />
 
-      {/* API connections placeholder */}
-      <Card className="shadow-sm border-dashed" data-testid="card-api-connections">
+      {/* Active data connections */}
+      <Card className="shadow-sm" data-testid="card-api-connections">
         <CardHeader className="pb-3 px-4 pt-4">
-          <CardTitle className="text-sm font-medium">API Connections</CardTitle>
+          <CardTitle className="text-sm font-medium">Active Data Sources</CardTitle>
         </CardHeader>
         <CardContent className="px-4 pb-4 space-y-3">
           {[
-            { name: "Nutritionix API", desc: "Food database search", status: "Demo mode", icon: Zap },
-            { name: "Open Food Facts", desc: "Barcode lookup", status: "Not connected", icon: Shield },
-            { name: "GPT-4 Vision", desc: "Food photo recognition", status: "Demo mode", icon: Wifi },
-            { name: "CGM Integration", desc: "Dexcom / Libre API", status: "Coming soon", icon: Database },
+            {
+              name: "USDA FoodData Central",
+              desc: "Powers food name search — 700,000+ foods, no key required",
+              icon: Search,
+              active: true,
+            },
+            {
+              name: "Open Food Facts",
+              desc: "Powers barcode scanning — 3 million+ packaged products worldwide",
+              icon: ScanBarcode,
+              active: true,
+            },
+            {
+              name: "LibreView / FreeStyle Libre",
+              desc: "Import glucose history via CSV on the Metabolic screen",
+              icon: Activity,
+              active: true,
+            },
           ].map((api) => {
             const Icon = api.icon;
             return (
-              <div key={api.name} className="flex items-center justify-between py-2">
-                <div className="flex items-center gap-3">
-                  <Icon className="w-4 h-4 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">{api.name}</p>
-                    <p className="text-[11px] text-muted-foreground">{api.desc}</p>
-                  </div>
+              <div key={api.name} className="flex items-start gap-3 py-2">
+                <div className="mt-0.5">
+                  {api.active
+                    ? <CheckCircle2 className="w-4 h-4 text-green-500" />
+                    : <Icon className="w-4 h-4 text-muted-foreground" />}
                 </div>
-                <Badge variant="secondary" className="text-[10px]">{api.status}</Badge>
+                <div>
+                  <p className="text-sm font-medium">{api.name}</p>
+                  <p className="text-[11px] text-muted-foreground">{api.desc}</p>
+                </div>
               </div>
             );
           })}
