@@ -8,7 +8,7 @@ import { openDB, type IDBPDatabase } from "idb";
 import type { FoodEntry, InsertFoodEntry, GlucoseReading, InsertGlucoseReading, UserSettings, InsertUserSettings } from "@shared/schema";
 
 const DB_NAME = "housemd-food-tracker";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // bumped for recipes store
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -27,10 +27,77 @@ function getDB(): Promise<IDBPDatabase> {
         if (!db.objectStoreNames.contains("user_settings")) {
           db.createObjectStore("user_settings", { keyPath: "id", autoIncrement: true });
         }
+        if (!db.objectStoreNames.contains("recipes")) {
+          db.createObjectStore("recipes", { keyPath: "id", autoIncrement: true });
+        }
       },
     });
   }
   return dbPromise;
+}
+
+// ─── Recipe types ──────────────────────────────────────────────────────────────
+
+export interface RecipeIngredient {
+  name: string;
+  servingSize: string;
+  calories: number;
+  protein: number;
+  fat: number;
+  totalCarbs: number;
+  fiber: number;
+  netCarbs: number;
+}
+
+export interface Recipe {
+  id: number;
+  name: string;
+  servings: number;          // how many servings the recipe makes
+  ingredients: RecipeIngredient[];
+  // totals for the whole recipe (sum of all ingredients)
+  totalCalories: number;
+  totalProtein: number;
+  totalFat: number;
+  totalCarbs: number;
+  totalFiber: number;
+  totalNetCarbs: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type InsertRecipe = Omit<Recipe, "id">;
+
+// ─── Recipe CRUD ───────────────────────────────────────────────────────────────
+
+export async function getRecipes(): Promise<Recipe[]> {
+  const db = await getDB();
+  const all = await db.getAll("recipes");
+  return all.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getRecipe(id: number): Promise<Recipe | undefined> {
+  const db = await getDB();
+  return db.get("recipes", id);
+}
+
+export async function saveRecipe(recipe: InsertRecipe): Promise<Recipe> {
+  const db = await getDB();
+  const id = await db.add("recipes", recipe);
+  return { ...recipe, id: id as number };
+}
+
+export async function updateRecipe(id: number, updates: Partial<InsertRecipe>): Promise<Recipe | undefined> {
+  const db = await getDB();
+  const existing = await db.get("recipes", id);
+  if (!existing) return undefined;
+  const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+  await db.put("recipes", updated);
+  return updated;
+}
+
+export async function deleteRecipe(id: number): Promise<void> {
+  const db = await getDB();
+  await db.delete("recipes", id);
 }
 
 const DEFAULT_SETTINGS: Omit<UserSettings, "id"> = {

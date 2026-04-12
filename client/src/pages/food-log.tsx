@@ -99,7 +99,7 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
     if (query.trim().length < 2) { setSearchResults([]); setSearchTotal(0); return; }
     setSearchLoading(true);
     try {
-      const url = `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=QKM9HMHZKVgeBnxCTsK22X8LAwETSEWpTYImOHjM&query=${encodeURIComponent(query)}&pageSize=25&dataType=Foundation,SR%20Legacy,Survey%20(FNDDS),Branded`;
+      const url = `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=QKM9HMHZKVgeBnxCTsK22X8LAwETSEWpTYImOHjM&query=${encodeURIComponent(query)}&pageSize=25`;
       const res = await fetch(url);
       const data = await res.json() as any;
       const foods = (data.foods || []).map((food: any) => {

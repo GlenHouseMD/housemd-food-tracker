@@ -9,8 +9,9 @@ import FoodLog from "@/pages/food-log";
 import Trends from "@/pages/trends";
 import Metabolic from "@/pages/metabolic";
 import Settings from "@/pages/settings";
+import Recipes from "@/pages/recipes";
 import NotFound from "@/pages/not-found";
-import { LayoutDashboard, UtensilsCrossed, TrendingUp, Activity, SettingsIcon, Moon, Sun } from "lucide-react";
+import { LayoutDashboard, UtensilsCrossed, TrendingUp, Activity, SettingsIcon, Moon, Sun, ChefHat } from "lucide-react";
 import { useState, useEffect } from "react";
 
 function ThemeToggle() {
@@ -37,6 +38,7 @@ function ThemeToggle() {
 const navItems = [
   { path: "/", icon: LayoutDashboard, label: "Dashboard" },
   { path: "/log", icon: UtensilsCrossed, label: "Food Log" },
+  { path: "/recipes", icon: ChefHat, label: "Recipes" },
   { path: "/trends", icon: TrendingUp, label: "Trends" },
   { path: "/metabolic", icon: Activity, label: "Metabolic" },
   { path: "/settings", icon: SettingsIcon, label: "Settings" },
@@ -116,6 +118,7 @@ function AppRouter() {
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/log" component={FoodLog} />
+      <Route path="/recipes" component={Recipes} />
       <Route path="/trends" component={Trends} />
       <Route path="/metabolic" component={Metabolic} />
       <Route path="/settings" component={Settings} />
