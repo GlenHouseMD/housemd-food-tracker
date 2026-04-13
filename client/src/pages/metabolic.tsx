@@ -396,10 +396,10 @@ export default function Metabolic() {
           <CardContent className="p-3.5">
             <div className="flex items-center gap-2 mb-1">
               <Info className="w-4 h-4 text-purple-500" />
-              <span className="text-xs font-medium text-muted-foreground">CGM Status</span>
+              <span className="text-xs font-medium text-muted-foreground">CGM Data</span>
             </div>
-            <Badge variant="secondary" className="text-[10px] mt-1">Not connected</Badge>
-            <p className="text-[10px] text-muted-foreground mt-1">Connect via API</p>
+            <Badge variant="secondary" className="text-[10px] mt-1 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">LibreView import</Badge>
+            <p className="text-[10px] text-muted-foreground mt-1">Import CSV below ↓</p>
           </CardContent>
         </Card>
       </div>
