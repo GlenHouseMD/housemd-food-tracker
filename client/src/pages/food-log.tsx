@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useFoodEntries, useAddFoodEntry, useDeleteFoodEntry, useSettings } from "@/hooks/use-food-data";
 import { format, addDays, subDays } from "date-fns";
-import { Plus, Trash2, ChevronLeft, ChevronRight, Search, Camera, ScanBarcode, PenLine, Sparkles, Loader2, AlertCircle, CheckCircle2, Keyboard } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, ChevronRight, Search, Camera, ScanBarcode, PenLine, Sparkles, Loader2, AlertCircle, CheckCircle2, Keyboard, X } from "lucide-react";
 import { getMealTypeLabel, getTagColor } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
@@ -67,6 +67,9 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Selected food from search — shown in confirm/adjust card before logging
+  const [selectedFood, setSelectedFood] = useState<USDAFood | null>(null);
+  const [selectedGrams, setSelectedGrams] = useState("100");
   
   // Barcode state
   const [barcodeInput, setBarcodeInput] = useState("");
@@ -136,19 +139,62 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
   }, [searchQuery, mode, doSearch]);
 
-  // ---- Select a food from search results (per 100g -> user can adjust) ----
+  // ---- Select a food from search results — show confirm card with gram adjuster ----
   function selectUSDAFood(food: USDAFood) {
-    const displayName = titleCase(food.name);
-    const brandSuffix = food.brand ? ` (${food.brand})` : "";
-    setName(displayName + brandSuffix);
-    setServing("100g");
-    setCal(String(Math.round(food.caloriesPer100g)));
-    setProtein(String(Math.round(food.proteinPer100g * 10) / 10));
-    setFat(String(Math.round(food.fatPer100g * 10) / 10));
-    setCarbs(String(Math.round(food.carbsPer100g * 10) / 10));
-    setFiber(String(Math.round(food.fiberPer100g * 10) / 10));
-    setSourceType("search");
-    setMode("manual");
+    // Use the food's actual serving size if available, otherwise default to 100g
+    const defaultGrams = food.servingSizeValue && food.servingSizeValue > 0
+      ? String(Math.round(food.servingSizeValue))
+      : "100";
+    setSelectedFood(food);
+    setSelectedGrams(defaultGrams);
+    setSearchResults([]);   // clear list so card is visible
+    setSearchQuery(titleCase(food.name) + (food.brand ? ` (${food.brand})` : ""));
+  }
+
+  // ---- Compute live macros from selected food + grams ----
+  function getSelectedMacros(food: USDAFood, grams: number) {
+    const f = grams / 100;
+    const r1 = (v: number) => Math.round(v * 10) / 10;
+    return {
+      calories: Math.round(food.caloriesPer100g * f),
+      protein: r1(food.proteinPer100g * f),
+      fat: r1(food.fatPer100g * f),
+      totalCarbs: r1(food.carbsPer100g * f),
+      fiber: r1(food.fiberPer100g * f),
+      netCarbs: r1(Math.max(0, food.carbsPer100g * f - food.fiberPer100g * f)),
+    };
+  }
+
+  // ---- Add the selected food from search ----
+  function addSelectedFood() {
+    if (!selectedFood) return;
+    const grams = parseFloat(selectedGrams) || 100;
+    const macros = getSelectedMacros(selectedFood, grams);
+    const displayName = titleCase(selectedFood.name) + (selectedFood.brand ? ` (${selectedFood.brand})` : "");
+    const tags: string[] = [];
+    if (macros.netCarbs <= 5) tags.push("ketogenic");
+    else if (macros.netCarbs <= 15) tags.push("low-carb");
+    if (macros.protein >= 25) tags.push("high-protein");
+    if (tags.length === 0) tags.push("mixed");
+    addMutation.mutate({
+      date, mealType,
+      name: displayName,
+      servingSize: `${grams}g`,
+      calories: macros.calories,
+      protein: macros.protein,
+      fat: macros.fat,
+      totalCarbs: macros.totalCarbs,
+      fiber: macros.fiber,
+      netCarbs: macros.netCarbs,
+      tags: JSON.stringify(tags),
+      source: "search",
+      createdAt: new Date().toISOString(),
+    }, {
+      onSuccess: () => {
+        toast({ title: "Food added", description: `${displayName} added to ${getMealTypeLabel(mealType)}` });
+        onClose();
+      },
+    });
   }
 
   // ---- Barcode lookup (direct to Open Food Facts from browser) ----
@@ -410,61 +456,146 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
       {/* ===== SEARCH MODE (USDA FoodData Central) ===== */}
       {mode === "search" && (
         <div className="flex flex-col gap-2 min-h-0">
-          {/* Results appear ABOVE the search box so the keyboard doesn't cover them */}
-          <div className="flex-1 overflow-y-auto overscroll-contain min-h-0" style={{ maxHeight: 260 }}>
-            {searchLoading && (
-              <div className="flex items-center gap-2 py-6 justify-center text-sm text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Searching...
-              </div>
-            )}
-            {!searchLoading && searchResults.length === 0 && searchQuery.length >= 2 && (
-              <p className="text-sm text-muted-foreground text-center py-6">No results found. Try a different term.</p>
-            )}
-            {!searchLoading && searchResults.length === 0 && searchQuery.length < 2 && (
-              <p className="text-sm text-muted-foreground text-center py-6">Type at least 2 characters to search</p>
-            )}
-            <div className="space-y-0.5">
-              {searchResults.map((food, i) => (
-                <button
-                  key={food.fdcId}
-                  onClick={() => selectUSDAFood(food)}
-                  className="w-full text-left p-2.5 rounded-lg hover:bg-muted/50 active:bg-muted transition-colors flex justify-between items-start gap-2"
-                  data-testid={`search-result-${i}`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium leading-tight">{titleCase(food.name)}</p>
-                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                      {food.brand && <span className="text-[10px] text-muted-foreground">{food.brand}</span>}
-                      {food.category && <span className="text-[10px] text-muted-foreground">· {food.category}</span>}
+
+          {/* ── Confirm card: shown after tapping a result ── */}
+          {selectedFood ? (() => {
+            const grams = parseFloat(selectedGrams) || 100;
+            const m = getSelectedMacros(selectedFood, grams);
+            return (
+              <div className="space-y-3">
+                <div className="p-3 rounded-lg border border-primary/30 bg-primary/5 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold leading-tight">{titleCase(selectedFood.name)}</p>
+                      {selectedFood.brand && <p className="text-xs text-muted-foreground">{selectedFood.brand}</p>}
+                      {selectedFood.category && <p className="text-[10px] text-muted-foreground">{selectedFood.category}</p>}
+                    </div>
+                    <button onClick={() => { setSelectedFood(null); setSearchQuery(""); }}
+                      className="p-1 text-muted-foreground hover:text-foreground shrink-0">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Gram adjuster — the key new feature */}
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Amount</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        value={selectedGrams}
+                        onChange={e => setSelectedGrams(e.target.value)}
+                        className="w-24 text-center font-medium"
+                        inputMode="decimal"
+                        min="1"
+                        data-testid="input-selected-grams"
+                      />
+                      <span className="text-sm text-muted-foreground">grams</span>
+                      {/* Quick-pick common amounts */}
+                      <div className="flex gap-1 flex-wrap">
+                        {[28, 100, 150, 200, 250].map(g => (
+                          <button key={g} onClick={() => setSelectedGrams(String(g))}
+                            className={`px-2 py-1 rounded text-[10px] font-medium border transition-colors ${
+                              Math.abs(grams - g) < 0.5
+                                ? 'bg-primary text-primary-foreground border-primary'
+                                : 'border-border hover:bg-muted'
+                            }`}>
+                            {g}g
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-xs font-medium">{Math.round(food.caloriesPer100g)}</p>
-                    <p className="text-[9px] text-muted-foreground">kcal/100g</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
 
-          {/* Search box pinned at the bottom — stays visible above keyboard */}
-          <div className="shrink-0 space-y-1 pt-1 border-t border-border/50">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                placeholder="Search foods (e.g., scrambled eggs, salmon)..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-                data-testid="input-food-search"
-              />
-            </div>
-            <p className="text-[10px] text-muted-foreground flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
-              USDA FoodData Central{searchTotal > 0 ? ` — ${searchTotal.toLocaleString()} results` : ""}
-            </p>
-          </div>
+                  {/* Live macro display */}
+                  <div className="grid grid-cols-5 gap-1 text-center pt-1 border-t border-border/40">
+                    {[
+                      { label: "kcal", val: m.calories },
+                      { label: "protein", val: m.protein + "g" },
+                      { label: "fat", val: m.fat + "g" },
+                      { label: "carbs", val: m.totalCarbs + "g" },
+                      { label: "net carbs", val: m.netCarbs + "g" },
+                    ].map(item => (
+                      <div key={item.label}>
+                        <p className="text-sm font-bold">{item.val}</p>
+                        <p className="text-[9px] text-muted-foreground">{item.label}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <Button className="w-full" onClick={addSelectedFood} disabled={addMutation.isPending}
+                  data-testid="button-add-selected-food">
+                  {addMutation.isPending
+                    ? <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                    : <Plus className="w-4 h-4 mr-1" />}
+                  Add to {getMealTypeLabel(mealType)}
+                </Button>
+
+                <button onClick={() => { setSelectedFood(null); setSearchQuery(""); }}
+                  className="w-full text-xs text-muted-foreground text-center py-1 hover:text-foreground">
+                  ← Search again
+                </button>
+              </div>
+            );
+          })() : (
+            <>
+              {/* Results list — above the search box */}
+              <div className="flex-1 overflow-y-auto overscroll-contain min-h-0" style={{ maxHeight: 240 }}>
+                {searchLoading && (
+                  <div className="flex items-center gap-2 py-6 justify-center text-sm text-muted-foreground">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Searching...
+                  </div>
+                )}
+                {!searchLoading && searchResults.length === 0 && searchQuery.length >= 2 && (
+                  <p className="text-sm text-muted-foreground text-center py-6">No results found. Try a different term.</p>
+                )}
+                {!searchLoading && searchResults.length === 0 && searchQuery.length < 2 && (
+                  <p className="text-sm text-muted-foreground text-center py-6">Type to search 700,000+ foods</p>
+                )}
+                <div className="space-y-0.5">
+                  {searchResults.map((food, i) => (
+                    <button
+                      key={food.fdcId}
+                      onClick={() => selectUSDAFood(food)}
+                      className="w-full text-left p-2.5 rounded-lg hover:bg-muted/50 active:bg-muted transition-colors flex justify-between items-start gap-2"
+                      data-testid={`search-result-${i}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium leading-tight">{titleCase(food.name)}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {food.brand && <span className="text-[10px] text-muted-foreground">{food.brand}</span>}
+                          {food.category && <span className="text-[10px] text-muted-foreground">· {food.category}</span>}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-xs font-medium">{Math.round(food.caloriesPer100g)}</p>
+                        <p className="text-[9px] text-muted-foreground">kcal/100g</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Search box pinned at bottom — stays above keyboard */}
+              <div className="shrink-0 space-y-1 pt-1 border-t border-border/50">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search foods (e.g., scrambled eggs, coffee)..."
+                    value={searchQuery}
+                    onChange={(e) => { setSearchQuery(e.target.value); setSelectedFood(null); }}
+                    className="pl-9"
+                    data-testid="input-food-search"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
+                  USDA FoodData Central{searchTotal > 0 ? ` — ${searchTotal.toLocaleString()} results` : ""}
+                </p>
+              </div>
+            </>
+          )}
         </div>
       )}
 
