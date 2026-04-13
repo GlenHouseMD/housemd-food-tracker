@@ -476,32 +476,51 @@ function AddFoodDialog({ date, mealType, onClose }: { date: string; mealType: st
                     </button>
                   </div>
 
-                  {/* Gram adjuster — the key new feature */}
-                  <div className="space-y-1">
+                  {/* Gram adjuster + oz stepper */}
+                  <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">Amount</Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        type="number"
-                        value={selectedGrams}
-                        onChange={e => setSelectedGrams(e.target.value)}
-                        className="w-24 text-center font-medium"
-                        inputMode="decimal"
-                        min="1"
-                        data-testid="input-selected-grams"
-                      />
-                      <span className="text-sm text-muted-foreground">grams</span>
-                      {/* Quick-pick common amounts */}
-                      <div className="flex gap-1 flex-wrap">
-                        {[28, 100, 150, 200, 250].map(g => (
-                          <button key={g} onClick={() => setSelectedGrams(String(g))}
-                            className={`px-2 py-1 rounded text-[10px] font-medium border transition-colors ${
-                              Math.abs(grams - g) < 0.5
-                                ? 'bg-primary text-primary-foreground border-primary'
-                                : 'border-border hover:bg-muted'
-                            }`}>
-                            {g}g
-                          </button>
-                        ))}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Grams input */}
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          type="number"
+                          value={selectedGrams}
+                          onChange={e => setSelectedGrams(e.target.value)}
+                          className="w-20 text-center font-medium"
+                          inputMode="decimal"
+                          min="1"
+                          data-testid="input-selected-grams"
+                        />
+                        <span className="text-sm text-muted-foreground">g</span>
+                      </div>
+
+                      <span className="text-muted-foreground/40 text-sm">|</span>
+
+                      {/* Ounce stepper: − X oz + */}
+                      <div className="flex items-center gap-0">
+                        <button
+                          onClick={() => {
+                            const currentOz = grams / 28.3495;
+                            const newOz = Math.max(0.5, Math.round(currentOz * 2 - 1) / 2); // step down 0.5 oz
+                            setSelectedGrams(String(Math.round(newOz * 28.3495)));
+                          }}
+                          className="w-8 h-8 flex items-center justify-center rounded-l-md border border-border hover:bg-muted active:bg-muted/70 text-base font-medium transition-colors"
+                          data-testid="button-oz-minus"
+                        >−</button>
+                        <div className="h-8 px-3 flex items-center justify-center border-t border-b border-border bg-muted/30 text-xs font-medium whitespace-nowrap min-w-[52px] text-center">
+                          {(grams / 28.3495) % 1 === 0
+                            ? `${Math.round(grams / 28.3495)} oz`
+                            : `${(grams / 28.3495).toFixed(1)} oz`}
+                        </div>
+                        <button
+                          onClick={() => {
+                            const currentOz = grams / 28.3495;
+                            const newOz = Math.round(currentOz * 2 + 1) / 2; // step up 0.5 oz
+                            setSelectedGrams(String(Math.round(newOz * 28.3495)));
+                          }}
+                          className="w-8 h-8 flex items-center justify-center rounded-r-md border border-border hover:bg-muted active:bg-muted/70 text-base font-medium transition-colors"
+                          data-testid="button-oz-plus"
+                        >+</button>
                       </div>
                     </div>
                   </div>
